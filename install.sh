@@ -3,6 +3,7 @@
 BIN_DIR=~/.local/bin/
 SYSTEMD_DIR=~/.config/systemd/user/
 
+mkdir -p ~/apps
 mkdir -p ${BIN_DIR}
 \cp -r atg.sh ${BIN_DIR}
 
