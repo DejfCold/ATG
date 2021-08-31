@@ -20,6 +20,9 @@ for app in ${apps[@]}; do
 	tmp="/tmp/ATG-$(uuidgen)/"
 	currdir=$(pwd)
 
+	echo -e "${INFO} Setting executable bit on ${app}"
+	chmod +x ${app}
+
 	mkdir -p ${tmp}
 	cd ${tmp}
 	echo -e "${INFO} Extracting ${app}"
