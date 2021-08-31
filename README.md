@@ -1,5 +1,6 @@
 # ATG - AppImage To Gnome
 Monitors and (de)installs AppImage from Gnome desktop
+(It might even work elsewhere, but I didn't try it - let me know!)
 
 - There's no need for a root user!
 - Runs as a user systemd service
