@@ -1,0 +1,7 @@
+[Unit]
+Description=AppImage to Gnome
+Wants=atg.path
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c %h/.local/bin/atg.sh
