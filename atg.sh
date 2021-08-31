@@ -14,7 +14,6 @@ installDir="${homedir}.local/share/applications/"
 
 apps=($(tree $appdir -f -i | grep .AppImage))
 
-echo -e "${WARN} $(env)"
 echo -e "${INFO} Adding all AppImages"
 
 for app in ${apps[@]}; do
