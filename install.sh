@@ -6,6 +6,7 @@ SYSTEMD_DIR=~/.config/systemd/user/
 mkdir -p ~/apps
 mkdir -p ${BIN_DIR}
 \cp -r atg.sh ${BIN_DIR}
+chmod +x ${BIN_DIR}atg.sh
 
 mkdir -p ${SYSTEMD_DIR}
 \cp -r atg.service ${SYSTEMD_DIR}
