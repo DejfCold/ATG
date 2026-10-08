@@ -2,8 +2,8 @@
 Description=AppImage to Gnome file watcher
 
 [Path]
-PathChanged=/home/%u/apps/
+PathChanged=%h/apps/
 Unit=atg.service
 
 [Install]
-WantedBy=atg.service
+WantedBy=default.target

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+payload_dir=$(mktemp -d "${TMPDIR:-/tmp}/atg-installer.XXXXXXXX")
+trap 'rm -rf -- "$payload_dir"' EXIT
+
+printf '%s' '@@ATG_SH_BASE64@@' | base64 --decode > "$payload_dir/atg.sh"
+printf '%s' '@@ATG_SERVICE_BASE64@@' | base64 --decode > "$payload_dir/atg.service"
+printf '%s' '@@ATG_PATH_BASE64@@' | base64 --decode > "$payload_dir/atg.path"
+ATG_SOURCE_DIR=$payload_dir
+export ATG_SOURCE_DIR
+
+@@INSTALL_RUNTIME@@
