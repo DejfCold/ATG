@@ -113,6 +113,7 @@ while IFS= read -r -d '' app; do
 		awk '
 			/^\[Desktop Entry\]$/ { main = 1; print; next }
 			/^\[/ { main = 0 }
+			main && /^TryExec=/ { next }
 			main && /^Exec=/ { print ENVIRON["ATG_DESKTOP_EXEC"]; exec_count++; next }
 			main && /^Icon=/ { print ENVIRON["ATG_DESKTOP_ICON"]; icon_count++; next }
 			{ print }
