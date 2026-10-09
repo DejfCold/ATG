@@ -4,4 +4,4 @@ Wants=atg.path
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c %h/.local/bin/atg.sh
+ExecStart=%h/.local/bin/atg.sh
