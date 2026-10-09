@@ -16,6 +16,8 @@ Download `atg-installer` from the latest GitHub release and run `bash atg-instal
 
 ATG stores each successfully processed AppImage's SHA-256 fingerprint and file signature in its generated launcher. Unchanged files with an intact launcher and icon are skipped without hashing or extraction. New or changed files are allowed to settle before ATG hashes and extracts them; no separate cache file is used.
 
+ATG preserves simple `env NAME=value …` launch prefixes. It omits desktop action shortcuts because their commands may target helpers inside the AppImage, and skips launchers with unsupported wrapper commands instead of rewriting them incorrectly.
+
 To install from a source checkout, run `bash install.sh`. CI builds an installer artifact on every branch push. Pushing a tag named `v*` (for example, `v1.0.0`) builds the same artifact and publishes a GitHub release with it attached. The artifact is generated from `atg.sh`, `atg.service`, `atg.path`, and `installer-runtime.sh` by `python3 build-installer.py`.
 
 ## Uninstall

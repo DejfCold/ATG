@@ -30,7 +30,7 @@ icon_dimensions() {
 	local file=$1 byte_count index marker length height width offset length_offset next_offset file_size
 	local -a bytes=()
 	if [[ ${file,,} == *.png ]]; then
-		read -r -a bytes < <(od -An -tu1 -N24 -- "$file")
+		read -r -a bytes < <(od -An -tu1 -w24 -N24 -- "$file")
 		if (( ${#bytes[@]} >= 24 )) && (( bytes[0] == 137 && bytes[1] == 80 && bytes[2] == 78 && bytes[3] == 71 && bytes[4] == 13 && bytes[5] == 10 && bytes[6] == 26 && bytes[7] == 10 )); then
 			height=$(( bytes[20] * 16777216 + bytes[21] * 65536 + bytes[22] * 256 + bytes[23] ))
 			width=$(( bytes[16] * 16777216 + bytes[17] * 65536 + bytes[18] * 256 + bytes[19] ))
@@ -119,6 +119,90 @@ wait_for_stable_appimage() {
 			return 0
 		fi
 	done
+	return 1
+}
+
+parse_desktop_exec() {
+	local line=$1 i ch start active=0 quoted=0 escaped=0 command_name token_index=0
+	local -a starts=() ends=() tokens=()
+	for ((i = 0; i < ${#line}; i++)); do
+		ch=${line:i:1}
+		if (( escaped )); then escaped=0; continue; fi
+		if (( quoted )) && [[ "$ch" == \\ ]]; then escaped=1; continue; fi
+		if [[ "$ch" == '"' ]]; then
+			(( active )) || start=$i
+			active=1
+			(( quoted )) && quoted=0 || quoted=1
+			continue
+		fi
+		if (( ! quoted )) && [[ "$ch" == ' ' || "$ch" == $'\t' ]]; then
+			if (( active )); then
+				starts+=("$start")
+				ends+=("$((i - 1))")
+				tokens+=("${line:start:i-start}")
+				active=0
+			fi
+			continue
+		fi
+		(( active )) || start=$i
+		active=1
+	done
+	(( ! quoted && ! escaped )) || return 1
+	if (( active )); then
+		starts+=("$start")
+		ends+=("$((${#line} - 1))")
+		tokens+=("${line:start}")
+	fi
+	(( ${#tokens[@]} > 0 )) || return 1
+	command_name=${tokens[0]//\"/}
+	command_name=${command_name##*/}
+	exec_prefix=
+	exec_suffix=
+	if [[ "$command_name" == env ]]; then
+		token_index=1
+		while (( token_index < ${#tokens[@]} )) && [[ "${tokens[token_index]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+			((token_index++))
+		done
+		(( token_index < ${#tokens[@]} )) || return 1
+		if [[ "${tokens[token_index]}" == -* ]]; then return 1; fi
+		exec_prefix=${line:0:${starts[token_index]}}
+	else
+		case "$command_name" in
+			sh|bash|dash|zsh|ksh|env|gtk-launch|flatpak-spawn|python|python[0-9]*|perl)
+				return 1
+				;;
+		esac
+		token_index=0
+	fi
+	exec_target=${tokens[token_index]//\"/}
+	exec_suffix=${line:$((ends[token_index] + 1))}
+}
+
+appimage_exec_target_exists() {
+	local root=$1 target=$2 root_real candidate resolved
+	local -a candidates=()
+	root_real=$(realpath -e -- "$root") || return 1
+	if [[ "$target" == /* ]]; then
+		candidates=("$root$target")
+	elif [[ "$target" == */* ]]; then
+		candidates=("$root/$target")
+	else
+		candidates=("$root/$target" "$root/bin/$target" "$root/usr/bin/$target" \
+			"$root/usr/local/bin/$target" "$root/sbin/$target" "$root/usr/sbin/$target")
+	fi
+	for candidate in "${candidates[@]}"; do
+		if [[ -x "$candidate" ]]; then
+			resolved=$(realpath -e -- "$candidate") || continue
+			[[ "$resolved" == "$root_real"/* && -f "$resolved" ]] && return 0
+		fi
+	done
+	if [[ "$target" != */* && "$target" != /* ]]; then
+		while IFS= read -r -d '' candidate; do
+			[[ "${candidate##*/}" == "$target" && -x "$candidate" ]] || continue
+			resolved=$(realpath -e -- "$candidate") || continue
+			[[ "$resolved" == "$root_real"/* && -f "$resolved" ]] && return 0
+		done < <(find "$root" \( -type f -o -type l \) -name "$target" -print0 2>/dev/null)
+	fi
 	return 1
 }
 
@@ -232,7 +316,14 @@ while IFS= read -r -d '' app; do
 		scan_app_stats["$app_id"]=$(stat -c '%s:%y:%z' -- "$app")
 		continue
 	fi
-	chmod u+x -- "$app"
+	app_mode=$(stat -c '%A' -- "$app")
+	owner_execute=${app_mode:3:1}
+	if [[ "$owner_execute" != x && "$owner_execute" != s ]]; then
+		if ! chmod u+x -- "$app"; then
+			printf '%s Could not make AppImage executable: %s\n' "$WARN" "$app" >&2
+			continue
+		fi
+	fi
 	app_stat=$(stat -c '%s:%y:%z' -- "$app")
 	scan_app_paths["$app_id"]=$app
 	scan_app_stats["$app_id"]=$app_stat
@@ -292,13 +383,20 @@ while IFS= read -r -d '' app; do
 		continue
 	fi
 
-	mapfile -d '' desktop_files < <(find "$root" -maxdepth 1 -type f -name '*.desktop' -print0)
+	mapfile -d '' desktop_files < <(find "$root" -maxdepth 1 \( -type f -o -type l \) -name '*.desktop' -print0)
 	if (( ${#desktop_files[@]} != 1 )); then
 		printf '%s Expected one root-level desktop file in %s; found %d\n' "$WARN" "$app" "${#desktop_files[@]}" >&2
 		rm -rf -- "$tmp_dir"
 		continue
 	fi
 	desktop_file=${desktop_files[0]}
+	root_real=$(realpath -e -- "$root")
+	desktop_real=$(realpath -e -- "$desktop_file") || desktop_real=
+	if [[ -z "$desktop_real" || "$desktop_real" != "$root_real"/* || ! -f "$desktop_real" ]]; then
+		printf '%s Root desktop file must resolve to a file inside the AppImage: %s\n' "$WARN" "$desktop_file" >&2
+		rm -rf -- "$tmp_dir"
+		continue
+	fi
 	desktop_name=$(desktop_main_value "$desktop_file" Name)
 	desktop_type=$(desktop_main_value "$desktop_file" Type)
 	if [[ -z "$desktop_name" || "$desktop_type" != Application ]]; then
@@ -339,22 +437,20 @@ while IFS= read -r -d '' app; do
 		rm -rf -- "$tmp_dir"
 		continue
 	fi
-	exec_suffix=$(printf '%s\n' "$exec_line" | awk '
-		{
-			quoted = 0
-			escaped = 0
-			for (i = 1; i <= length($0); i++) {
-				ch = substr($0, i, 1)
-				if (escaped) { escaped = 0; continue }
-				if (quoted && ch == "\\") { escaped = 1; continue }
-				if (ch == "\"") { quoted = !quoted; continue }
-				if (!quoted && ch ~ /[ \t]/) { print substr($0, i); exit }
-			}
-		}')
-	desktop_metadata=$(printf 'Exec=%s\nIcon=%s' "$app_exec$exec_suffix" "$icon_target" | sha256sum)
+	if ! parse_desktop_exec "$exec_line"; then
+		printf '%s Unsupported Exec wrapper in %s; launcher was not created\n' "$WARN" "$desktop_file" >&2
+		rm -rf -- "$tmp_dir"
+		continue
+	fi
+	if ! appimage_exec_target_exists "$root" "$exec_target"; then
+		printf '%s Exec target is not an executable inside the AppImage: %s\n' "$WARN" "$exec_target" >&2
+		rm -rf -- "$tmp_dir"
+		continue
+	fi
+	desktop_metadata=$(printf 'Exec=%s\nIcon=%s' "$exec_prefix$app_exec$exec_suffix" "$icon_target" | sha256sum)
 	desktop_metadata=${desktop_metadata%% *}
 	desktop_tmp="$desktop_file.atg"
-	if ! ATG_APP_EXEC="$app_exec" ATG_DESKTOP_ICON="Icon=$icon_target" \
+	if ! ATG_DESKTOP_EXEC="Exec=$exec_prefix$app_exec$exec_suffix" ATG_DESKTOP_ICON="Icon=$icon_target" \
 		ATG_DESKTOP_FINGERPRINT="X-ATG-AppImage-SHA256=$app_fingerprint" \
 		ATG_DESKTOP_ICON_FINGERPRINT="X-ATG-Icon-SHA256=$icon_fingerprint" \
 		ATG_DESKTOP_APP_STAT="X-ATG-AppImage-Stat=$app_stat" \
@@ -366,7 +462,7 @@ while IFS= read -r -d '' app; do
 				if (main && !icon_fingerprint_count) print ENVIRON["ATG_DESKTOP_ICON_FINGERPRINT"]
 				if (main && !app_stat_count) print ENVIRON["ATG_DESKTOP_APP_STAT"]
 				if (main && !metadata_count) print ENVIRON["ATG_DESKTOP_METADATA"]
-				main = 0; action = 1; print; next
+				main = 0; action = 1; next
 			}
 			/^\[/ {
 				if (main && !fingerprint_count) print ENVIRON["ATG_DESKTOP_FINGERPRINT"]
@@ -381,24 +477,10 @@ while IFS= read -r -d '' app; do
 			main && /^[ \t]*X-ATG-Desktop-SHA256[ \t]*=/ { print ENVIRON["ATG_DESKTOP_METADATA"]; metadata_count++; next }
 			main && /^[ \t]*TryExec[ \t]*=/ { next }
 			main && /^[ \t]*DBusActivatable[ \t]*=/ { next }
-			(main || action) && /^[ \t]*Exec[ \t]*=/ {
-				command = $0
-				sub(/^[ \t]*Exec[ \t]*=[ \t]*/, "", command)
-				suffix = ""
-				quoted = 0
-				escaped = 0
-				for (i = 1; i <= length(command); i++) {
-					ch = substr(command, i, 1)
-					if (escaped) { escaped = 0; continue }
-					if (quoted && ch == "\\") { escaped = 1; continue }
-					if (ch == "\"") { quoted = !quoted; continue }
-					if (!quoted && ch ~ /[ \t]/) { suffix = substr(command, i); break }
-				}
-				print "Exec=" ENVIRON["ATG_APP_EXEC"] suffix
-				if (main) exec_count++
-				next
-			}
+			main && /^[ \t]*Actions[ \t]*=/ { next }
+			main && /^[ \t]*Exec[ \t]*=/ { print ENVIRON["ATG_DESKTOP_EXEC"]; exec_count++; next }
 			main && /^[ \t]*Icon[ \t]*=/ { print ENVIRON["ATG_DESKTOP_ICON"]; icon_count++; next }
+			action { next }
 			{ print }
 			END {
 				if (main && !fingerprint_count) print ENVIRON["ATG_DESKTOP_FINGERPRINT"]
